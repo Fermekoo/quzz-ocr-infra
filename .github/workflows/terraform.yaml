@@ -83,8 +83,15 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
-      - name: Terraform Workspace Select or New
-        run: terraform workspace select ${{ env.TF_WORKSPACE }} || terraform workspace new ${{ env.TF_WORKSPACE }}
+      - name: Select or Create Terraform Workspace
+        run: |
+          if ! terraform workspace list | grep -q "${{ env.TF_WORKSPACE }}"; then
+            echo "Workspace ${{ env.TF_WORKSPACE }} does not exist. Creating it."
+            terraform workspace new "${{ env.TF_WORKSPACE }}"
+          else
+            echo "Workspace ${{ env.TF_WORKSPACE }} already exists. Selecting it."
+            terraform workspace select "${{ env.TF_WORKSPACE }}"
+          fi
 
       - name: Terraform Plan for PR
         if: github.event_name == 'pull_request'
