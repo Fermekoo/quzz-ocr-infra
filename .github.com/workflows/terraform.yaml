@@ -3,7 +3,7 @@ name: 'Terraform CI/CD'
 on:
   pull_request:
     branches:
-      - main
+      - master
       - development
   workflow_dispatch:
     inputs:
@@ -19,7 +19,7 @@ on:
         required: true
         type: choice
         options:
-        - main
+        - master
         - development
       confirmation:
         description: 'Type the action name ("apply" or "destroy") to confirm'
@@ -46,7 +46,7 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             # Untuk PR, gunakan branch target (base_ref)
-            if [[ "${{ github.base_ref }}" == "main" ]]; then
+            if [[ "${{ github.base_ref }}" == "master" ]]; then
               echo "TF_WORKSPACE=prod" >> $GITHUB_ENV
               echo "TF_VAR_FILE=prod.tfvars" >> $GITHUB_ENV
             else
@@ -55,7 +55,7 @@ jobs:
             fi
           elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             # Untuk pemicu manual, gunakan input branch
-            if [[ "${{ github.event.inputs.branch }}" == "main" ]]; then
+            if [[ "${{ github.event.inputs.branch }}" == "master" ]]; then
               echo "TF_WORKSPACE=prod" >> $GITHUB_ENV
               echo "TF_VAR_FILE=prod.tfvars" >> $GITHUB_ENV
             else
