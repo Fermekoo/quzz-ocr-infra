@@ -1,13 +1,3 @@
-# ===================================================================================
-# WORKFLOW TERPADU: JARINGAN & KLASTER
-# ===================================================================================
-# Tujuan: Mengelola seluruh infrastruktur (VPC dan EKS) secara berurutan.
-# Urutan: Job 'terraform_cluster' hanya akan berjalan SETELAH 'terraform_network' sukses.
-# Pemicu:
-# - Plan: Saat ada Pull Request ke 'main' atau 'development'.
-# - Apply/Destroy: Secara manual melalui menu Actions.
-# ===================================================================================
-
 name: 'Terraform Full CI/CD'
 
 on:
@@ -118,7 +108,7 @@ jobs:
   terraform_cluster:
     name: 'Terraform Cluster'
     runs-on: ubuntu-latest
-    needs: terraform_network
+    needs: terraform_network # <-- INI KUNCINYA
 
     steps:
       - name: Checkout
@@ -158,9 +148,6 @@ jobs:
 
       - name: Terraform Init
         run: terraform init
-
-      - name: Select Workspace
-        run: terraform workspace select ${{ env.TF_WORKSPACE }}
 
       - name: Terraform Plan (Cluster)
         id: plan_cluster
