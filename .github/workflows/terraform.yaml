@@ -83,14 +83,17 @@ jobs:
       - name: Terraform Init
         run: terraform init
 
-      - name: Select or Create Terraform Workspace
+      - name: Create Workspace if it Does Not Exist
         run: |
-          if ! terraform workspace list | grep -q "${{ env.TF_WORKSPACE }}"; then
-            echo "Workspace ${{ env.TF_WORKSPACE }} does not exist. Creating it."
+          # TF_WORKSPACE sudah otomatis memilih workspace.
+          # Kita hanya perlu membuat workspace jika belum ada.
+          WORKSPACE_EXISTS=$(terraform workspace list | grep -w "${{ env.TF_WORKSPACE }}" | wc -l)
+
+          if [ "$WORKSPACE_EXISTS" -eq 0 ]; then
+            echo "Workspace '${{ env.TF_WORKSPACE }}' does not exist. Creating it."
             terraform workspace new "${{ env.TF_WORKSPACE }}"
           else
-            echo "Workspace ${{ env.TF_WORKSPACE }} already exists. Selecting it."
-            terraform workspace select "${{ env.TF_WORKSPACE }}"
+            echo "Workspace '${{ env.TF_WORKSPACE }}' already exists. Selection is handled by TF_WORKSPACE env var."
           fi
 
       - name: Terraform Plan for PR
