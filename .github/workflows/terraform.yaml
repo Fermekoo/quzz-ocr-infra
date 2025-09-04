@@ -1,9 +1,19 @@
-name: 'Terraform CI/CD'
+# ===================================================================================
+# WORKFLOW TERPADU: JARINGAN & KLASTER
+# ===================================================================================
+# Tujuan: Mengelola seluruh infrastruktur (VPC dan EKS) secara berurutan.
+# Urutan: Job 'terraform_cluster' hanya akan berjalan SETELAH 'terraform_network' sukses.
+# Pemicu:
+# - Plan: Saat ada Pull Request ke 'main' atau 'development'.
+# - Apply/Destroy: Secara manual melalui menu Actions.
+# ===================================================================================
+
+name: 'Terraform Full CI/CD'
 
 on:
   pull_request:
     branches:
-      - master
+      - main
       - development
   workflow_dispatch:
     inputs:
@@ -11,16 +21,12 @@ on:
         description: 'Action to perform (apply or destroy)'
         required: true
         type: choice
-        options:
-        - apply
-        - destroy
+        options: [apply, destroy]
       branch:
         description: 'Branch (environment) to target'
         required: true
         type: choice
-        options:
-        - master
-        - development
+        options: [main, development]
       confirmation:
         description: 'Type the action name ("apply" or "destroy") to confirm'
         required: true
@@ -31,8 +37,11 @@ permissions:
   pull-requests: write
 
 jobs:
-  terraform:
-    name: 'Terraform'
+  # ===================================================================================
+  # JOB 1: JARINGAN (VPC)
+  # ===================================================================================
+  terraform_network:
+    name: 'Terraform Network'
     runs-on: ubuntu-latest
 
     steps:
@@ -42,31 +51,24 @@ jobs:
           ref: ${{ github.event.inputs.branch || github.ref }}
 
       - name: Set Environment
-        id: set_env
         run: |
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            # Untuk PR, gunakan branch target (base_ref)
-            if [[ "${{ github.base_ref }}" == "master" ]]; then
-              echo "TF_WORKSPACE=prod" >> $GITHUB_ENV
-              echo "TF_VAR_FILE=prod.tfvars" >> $GITHUB_ENV
-            else
-              echo "TF_WORKSPACE=dev" >> $GITHUB_ENV
-              echo "TF_VAR_FILE=dev.tfvars" >> $GITHUB_ENV
-            fi
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            # Untuk pemicu manual, gunakan input branch
-            if [[ "${{ github.event.inputs.branch }}" == "master" ]]; then
-              echo "TF_WORKSPACE=prod" >> $GITHUB_ENV
-              echo "TF_VAR_FILE=prod.tfvars" >> $GITHUB_ENV
-            else
-              echo "TF_WORKSPACE=dev" >> $GITHUB_ENV
-              echo "TF_VAR_FILE=dev.tfvars" >> $GITHUB_ENV
-            fi
-            # Validasi input konfirmasi harus sesuai dengan tindakan yang dipilih
-            if [[ "${{ github.event.inputs.confirmation }}" != "${{ github.event.inputs.action }}" ]]; then
-              echo "Error: Confirmation input must match the selected action ('${{ github.event.inputs.action }}') to proceed."
-              exit 1
-            fi
+            TARGET_BRANCH="${{ github.base_ref }}"
+          else
+            TARGET_BRANCH="${{ github.event.inputs.branch }}"
+          fi
+
+          if [[ "$TARGET_BRANCH" == "main" ]]; then
+            echo "TF_WORKSPACE=prod" >> $GITHUB_ENV
+            echo "TF_VAR_FILE=prod.tfvars" >> $GITHUB_ENV
+          else
+            echo "TF_WORKSPACE=dev" >> $GITHUB_ENV
+            echo "TF_VAR_FILE=dev.tfvars" >> $GITHUB_ENV
+          fi
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.confirmation }}" != "${{ github.event.inputs.action }}" ]]; then
+            echo "Error: Confirmation input must match the selected action."
+            exit 1
           fi
 
       - name: Configure AWS Credentials
@@ -77,52 +79,107 @@ jobs:
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
 
       - name: Terraform Init
         run: terraform init
 
       - name: Create Workspace if it Does Not Exist
         run: |
-          # TF_WORKSPACE sudah otomatis memilih workspace.
-          # Kita hanya perlu membuat workspace jika belum ada.
           WORKSPACE_EXISTS=$(terraform workspace list | grep -w "${{ env.TF_WORKSPACE }}" | wc -l)
-
           if [ "$WORKSPACE_EXISTS" -eq 0 ]; then
-            echo "Workspace '${{ env.TF_WORKSPACE }}' does not exist. Creating it."
             terraform workspace new "${{ env.TF_WORKSPACE }}"
-          else
-            echo "Workspace '${{ env.TF_WORKSPACE }}' already exists. Selection is handled by TF_WORKSPACE env var."
           fi
 
-      - name: Terraform Plan for PR
-        if: github.event_name == 'pull_request'
-        id: plan
-        run: terraform plan -no-color -var-file=${{ env.TF_VAR_FILE }}
+      - name: Terraform Plan (Network Only)
+        id: plan_network
+        run: terraform plan -no-color -var-file=${{ env.TF_VAR_FILE }} -target="module.vpc"
 
-      - name: Create Plan Comment on PR
+      - name: Create Plan Comment on PR (Network)
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v6
         with:
           script: |
-            const output = `#### Terraform Plan 📖\`\`\`\n${{ steps.plan.outputs.stdout }}\`\`\``;
+            const output = `#### Terraform Plan (Network Only) 📖\`\`\`\n${{ steps.plan_network.outputs.stdout }}\`\`\``;
             github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: output
+              issue_number: context.issue.number, owner: context.repo.owner, repo: context.repo.repo, body: output
             });
 
-      - name: Terraform Plan for Manual Apply
+      - name: Terraform Apply (Network Only)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply'
-        run: terraform plan -no-color -var-file=${{ env.TF_VAR_FILE }} -out=tfplan
+        run: terraform apply -auto-approve -var-file=${{ env.TF_VAR_FILE }} -target="module.vpc"
 
-      - name: Terraform Apply
+      - name: Terraform Destroy (Network Only)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+        run: terraform destroy -auto-approve -var-file=${{ env.TF_VAR_FILE }} -target="module.vpc"
+
+  # ===================================================================================
+  # JOB 2: KLASTER (EKS)
+  # ===================================================================================
+  terraform_cluster:
+    name: 'Terraform Cluster'
+    runs-on: ubuntu-latest
+    needs: terraform_network
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - name: Set Environment
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            TARGET_BRANCH="${{ github.base_ref }}"
+          else
+            TARGET_BRANCH="${{ github.event.inputs.branch }}"
+          fi
+
+          if [[ "$TARGET_BRANCH" == "main" ]]; then
+            echo "TF_WORKSPACE=prod" >> $GITHUB_ENV
+            echo "TF_VAR_FILE=prod.tfvars" >> $GITHUB_ENV
+          else
+            echo "TF_WORKSPACE=dev" >> $GITHUB_ENV
+            echo "TF_VAR_FILE=dev.tfvars" >> $GITHUB_ENV
+          fi
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.confirmation }}" != "${{ github.event.inputs.action }}" ]]; then
+            echo "Error: Confirmation input must match the selected action."
+            exit 1
+          fi
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Select Workspace
+        run: terraform workspace select ${{ env.TF_WORKSPACE }}
+
+      - name: Terraform Plan (Cluster)
+        id: plan_cluster
+        run: terraform plan -no-color -var-file=${{ env.TF_VAR_FILE }}
+
+      - name: Create Plan Comment on PR (Cluster)
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const output = `#### Terraform Plan (Cluster) 📖\`\`\`\n${{ steps.plan_cluster.outputs.stdout }}\`\`\``;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number, owner: context.repo.owner, repo: context.repo.repo, body: output
+            });
+
+      - name: Terraform Apply (Cluster)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply'
-        run: terraform apply -auto-approve tfplan
+        run: terraform apply -auto-approve -var-file=${{ env.TF_VAR_FILE }}
 
-      - name: Terraform Destroy
+      - name: Terraform Destroy (Cluster - FULL DESTROY)
         if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
         run: terraform destroy -auto-approve -var-file=${{ env.TF_VAR_FILE }}
-
