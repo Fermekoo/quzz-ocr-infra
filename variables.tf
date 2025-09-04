@@ -5,7 +5,7 @@ variable "aws_region" {
 }
 
 variable "environment" {
-    description= "deployment environment. use 'd'  for development or 'p' for production"
+    description= "deployment environment. use 'd' for development or 'p' for production"
     type = string
 
     validation{
