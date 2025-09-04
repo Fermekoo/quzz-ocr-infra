@@ -1,0 +1,118 @@
+name: 'Terraform CI/CD'
+
+on:
+  pull_request:
+    branches:
+      - main
+      - development
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform (apply or destroy)'
+        required: true
+        type: choice
+        options:
+        - apply
+        - destroy
+      branch:
+        description: 'Branch (environment) to target'
+        required: true
+        type: choice
+        options:
+        - main
+        - development
+      confirmation:
+        description: 'Type the action name ("apply" or "destroy") to confirm'
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  terraform:
+    name: 'Terraform'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - name: Set Environment
+        id: set_env
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # Untuk PR, gunakan branch target (base_ref)
+            if [[ "${{ github.base_ref }}" == "main" ]]; then
+              echo "TF_WORKSPACE=prod" >> $GITHUB_ENV
+              echo "TF_VAR_FILE=prod.tfvars" >> $GITHUB_ENV
+            else
+              echo "TF_WORKSPACE=dev" >> $GITHUB_ENV
+              echo "TF_VAR_FILE=dev.tfvars" >> $GITHUB_ENV
+            fi
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Untuk pemicu manual, gunakan input branch
+            if [[ "${{ github.event.inputs.branch }}" == "main" ]]; then
+              echo "TF_WORKSPACE=prod" >> $GITHUB_ENV
+              echo "TF_VAR_FILE=prod.tfvars" >> $GITHUB_ENV
+            else
+              echo "TF_WORKSPACE=dev" >> $GITHUB_ENV
+              echo "TF_VAR_FILE=dev.tfvars" >> $GITHUB_ENV
+            fi
+            # Validasi input konfirmasi harus sesuai dengan tindakan yang dipilih
+            if [[ "${{ github.event.inputs.confirmation }}" != "${{ github.event.inputs.action }}" ]]; then
+              echo "Error: Confirmation input must match the selected action ('${{ github.event.inputs.action }}') to proceed."
+              exit 1
+            fi
+          fi
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Workspace Select or New
+        run: terraform workspace select ${{ env.TF_WORKSPACE }} || terraform workspace new ${{ env.TF_WORKSPACE }}
+
+      - name: Terraform Plan for PR
+        if: github.event_name == 'pull_request'
+        id: plan
+        run: terraform plan -no-color -var-file=${{ env.TF_VAR_FILE }}
+
+      - name: Create Plan Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const output = `#### Terraform Plan 📖\`\`\`\n${{ steps.plan.outputs.stdout }}\`\`\``;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+
+      - name: Terraform Plan for Manual Apply
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply'
+        run: terraform plan -no-color -var-file=${{ env.TF_VAR_FILE }} -out=tfplan
+
+      - name: Terraform Apply
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply'
+        run: terraform apply -auto-approve tfplan
+
+      - name: Terraform Destroy
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'destroy'
+        run: terraform destroy -auto-approve -var-file=${{ env.TF_VAR_FILE }}
+
